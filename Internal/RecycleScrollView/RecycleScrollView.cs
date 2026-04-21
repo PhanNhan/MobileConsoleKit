@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -93,6 +93,14 @@ namespace MobileConsole.UI
 		{
 			_lastScrollPos = _viewContent.localPosition;
 			_scrollRect.onValueChanged.AddListener(OnScrollRectChanged);
+		}
+
+		void OnDestroy()
+		{
+			if (_scrollRect != null)
+			{
+				_scrollRect.onValueChanged.RemoveListener(OnScrollRectChanged);
+			}
 		}
 
 		void OnEnable()
@@ -550,6 +558,11 @@ namespace MobileConsole.UI
 
 		public bool IsViewAtBottom()
 		{
+			if (_viewContent == null)
+			{
+				return false;
+			}
+
 			if (_scrollOrientation == ScrollOrientation.Vertical)
 			{
 				if (Mathf.Abs(_viewContent.offsetMin.y) - _viewportHeight < 1)
@@ -636,4 +649,3 @@ namespace MobileConsole.UI
 		}
 	}
 }
-
