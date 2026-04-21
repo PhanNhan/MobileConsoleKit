@@ -77,13 +77,23 @@ namespace MobileConsole.UI
 		Vector2 _contentOffsetMax;
 		float _viewportHeight;
 		float _lastViewPortHeight;
-        ReloadingState _reloadingState = ReloadingState.Idle;
+		bool _isDestroyed;
+	        ReloadingState _reloadingState = ReloadingState.Idle;
 
-        public Vector2 ScrollPosition
+	        public Vector2 ScrollPosition
 		{
-			get { return _scrollRect.normalizedPosition; }
+			get
+			{
+				if (_scrollRect == null)
+					return Vector2.zero;
+
+				return _scrollRect.normalizedPosition;
+			}
 			set 
 			{
+				if (!CanAccessView())
+					return;
+
 				_scrollRect.normalizedPosition = value;
 				OnScrollRectChanged(Vector2.zero);
 			}
@@ -91,20 +101,32 @@ namespace MobileConsole.UI
 
 		void Awake()
 		{
+			if (!CanAccessView())
+				return;
+
 			_lastScrollPos = _viewContent.localPosition;
 			_scrollRect.onValueChanged.AddListener(OnScrollRectChanged);
 		}
 
 		void OnDestroy()
 		{
+			_isDestroyed = true;
+			StopAllCoroutines();
+
 			if (_scrollRect != null)
 			{
 				_scrollRect.onValueChanged.RemoveListener(OnScrollRectChanged);
 			}
+
+			_activeCells.Clear();
+			_cellPools.Clear();
 		}
 
 		void OnEnable()
 		{
+			if (!CanAccessView())
+				return;
+
 			_contentOffsetMax = _viewContent.offsetMax;
 			_viewportHeight = _viewPort.rect.height;
 
@@ -121,6 +143,9 @@ namespace MobileConsole.UI
 
 		void Update()
 		{
+			if (!CanAccessView())
+				return;
+
 			_viewportHeight = _viewPort.rect.height;
 			if (_viewportHeight - _lastViewPortHeight > float.Epsilon)
 			{
@@ -136,6 +161,9 @@ namespace MobileConsole.UI
 
 		void OnScrollRectChanged(Vector2 position)
 		{
+			if (!CanAccessView())
+				return;
+
 			if (_lastScrollPos.y > _viewContent.localPosition.y)
 			{
 				OnScrollRectMoveDown();
@@ -150,6 +178,9 @@ namespace MobileConsole.UI
 		public void SetDelegate(IRecycleScrollViewDelegate _delegate)
 		{
 			this._delegate = _delegate;
+
+			if (_cellTemplates == null)
+				return;
 
 			foreach (var cell in _cellTemplates)
 			{
@@ -167,6 +198,11 @@ namespace MobileConsole.UI
 		{
 			if (templates != null)
 			{
+				if (_cellTemplates == null)
+				{
+					_cellTemplates = new List<ScrollViewCell>();
+				}
+
 				_cellTemplates.AddRange(templates);
 			}
 		}
@@ -175,14 +211,22 @@ namespace MobileConsole.UI
 		{
 			if (template != null)
 			{
+				if (_cellTemplates == null)
+				{
+					_cellTemplates = new List<ScrollViewCell>();
+				}
+
 				_cellTemplates.Add(template);
 			}
 		}
 
-        public void ReloadData()
-        {
-            if (isActiveAndEnabled)
-            {
+	        public void ReloadData()
+	        {
+	            if (_isDestroyed)
+	                return;
+
+	            if (isActiveAndEnabled)
+	            {
                 StartCoroutine(_ReloadData());
             }
             else
@@ -191,9 +235,9 @@ namespace MobileConsole.UI
             }
         }
 
-        IEnumerator _ReloadData()
-        {
-            if (_delegate == null)
+	        IEnumerator _ReloadData()
+	        {
+	            if (_delegate == null)
             {
                 throw new Exception("You must set delegate first");
             }
@@ -202,10 +246,16 @@ namespace MobileConsole.UI
                 yield break;
             _reloadingState = ReloadingState.Reloading;
 
-            while (true)
-            {
-                LazyGetViewportHeight();
-                if (_viewportHeight <= 0)
+	            while (true)
+	            {
+	                if (!CanAccessView())
+	                {
+	                    _reloadingState = ReloadingState.Idle;
+	                    yield break;
+	                }
+
+	                LazyGetViewportHeight();
+	                if (_viewportHeight <= 0)
                     yield return new WaitForEndOfFrame();
                 else break;
             }
@@ -216,14 +266,17 @@ namespace MobileConsole.UI
             UpdateViewContent();
             UpdateCellVisibility();
 
-            if (_scrollRectWorkAround != null)
-                _scrollRectWorkAround.ForceUpdateScrollBar(_scrollRect.normalizedPosition);
+	            if (_scrollRectWorkAround != null && _scrollRect != null)
+	                _scrollRectWorkAround.ForceUpdateScrollBar(_scrollRect.normalizedPosition);
 
             _reloadingState = ReloadingState.Idle;
         }
 
-        public void AddCell(bool isFirst = false)
+	        public void AddCell(bool isFirst = false)
 		{
+			if (_delegate == null || !CanAccessView())
+				return;
+
 			ScrollViewCellInfo cellInfo = _poolCellInfo.Get();
 
 			LazyGetViewportHeight();
@@ -274,16 +327,21 @@ namespace MobileConsole.UI
 
 		public ScrollViewCell GetActiveCellAtIndex(int cellIndex)
 		{
-			return _activeCells.Find(cell => cell.info.index == cellIndex);
+			return _activeCells.Find(cell => cell != null && cell.info != null && cell.info.index == cellIndex);
 		}
 
 		protected virtual void OnScrollRectMoveUp()
 		{
+			if (!CanAccessView())
+				return;
+
+			RemoveMissingActiveCells();
+
 			// Cached data for further optimization
 			_contentOffsetMax = _viewContent.offsetMax;
 
 			int lastCellIndex = _activeCells.Count > 0 ? _activeCells[_activeCells.Count - 1].info.index : 0;
-			List<ScrollViewCell> removedCells = _activeCells.FindAll(cell => IsCellInsideViewPort(cell.info) == false);
+			List<ScrollViewCell> removedCells = _activeCells.FindAll(cell => cell != null && cell.info != null && IsCellInsideViewPort(cell.info) == false);
 			foreach (var cell in removedCells)
 			{
 				DeactiveCell(cell);
@@ -306,11 +364,16 @@ namespace MobileConsole.UI
 
 		protected virtual void OnScrollRectMoveDown()
 		{
+			if (!CanAccessView())
+				return;
+
+			RemoveMissingActiveCells();
+
 			// Cached data for further optimization
 			_contentOffsetMax = _viewContent.offsetMax;
 
 			int firstCellIndex = _activeCells.Count > 0 ? _activeCells[0].info.index : _cellInfos.Count;
-			List<ScrollViewCell> removedCells = _activeCells.FindAll(cell => IsCellInsideViewPort(cell.info) == false);
+			List<ScrollViewCell> removedCells = _activeCells.FindAll(cell => cell != null && cell.info != null && IsCellInsideViewPort(cell.info) == false);
 
 			foreach (var cell in removedCells)
 			{
@@ -334,6 +397,9 @@ namespace MobileConsole.UI
 
 		void UpdateCellVisibility()
 		{
+			if (!CanAccessView())
+				return;
+
 			if (_cellInfos.Count == 0)
 				return;
 
@@ -393,12 +459,21 @@ namespace MobileConsole.UI
 
 		protected void NotifyCellSelected(ScrollViewCell cell)
 		{
+			if (_delegate == null || cell == null || cell.info == null)
+				return;
+
 			_delegate.ScrollCellSelected(cell.info.index);
 		}
 
 		protected void AddActiveCell(ScrollViewCellInfo cellInfo, bool isFirst = false)
 		{
+			if (_delegate == null || cellInfo == null || !CanAccessView())
+				return;
+
 			ScrollViewCell cell = _delegate.ScrollCellCreated(cellInfo.index);
+			if (cell == null)
+				return;
+
 			cell.info = cellInfo;
 
 			if (_scrollOrientation == ScrollOrientation.Vertical)
@@ -424,6 +499,9 @@ namespace MobileConsole.UI
 
 		public ScrollViewCell CreateCell(string identifier)
 		{
+			if (!CanAccessView())
+				return null;
+
 			if (!_cellPools.ContainsKey(identifier))
 			{
 				throw new Exception("Could not found cell type with identifier: " + identifier);
@@ -431,12 +509,14 @@ namespace MobileConsole.UI
 
 			List<ScrollViewCell> cellPool = _cellPools[identifier];
 			ScrollViewCell cell = null;
-			if (cellPool.Count > 0)
+
+			while (cellPool.Count > 0 && cell == null)
 			{
 				cell = cellPool[0];
 				cellPool.Remove(cell);
 			}
-			else
+
+			if (cell == null)
 			{
 				cell = CreateNewCell(identifier);
 			}
@@ -447,7 +527,10 @@ namespace MobileConsole.UI
 
 		ScrollViewCell CreateNewCell(string identifier)
 		{
-			ScrollViewCell cellTemplate = _cellTemplates.Find(template => template.identifier == identifier);
+			if (!CanAccessView() || _cellTemplates == null)
+				return null;
+
+			ScrollViewCell cellTemplate = _cellTemplates.Find(template => template != null && template.identifier == identifier);
 			if (cellTemplate == null)
 			{
 				throw new Exception("Could not found cell type with identifier: " + identifier);
@@ -469,7 +552,7 @@ namespace MobileConsole.UI
 		{
 			_poolCellInfo.Return(_cellInfos);
 			_cellInfos.Clear();
-			int cellCount = _delegate.ScrollCellCount();
+			int cellCount = Mathf.Max(0, _delegate.ScrollCellCount());
 
 			for (int i = 0; i < cellCount; i++)
 			{
@@ -485,6 +568,9 @@ namespace MobileConsole.UI
 			float position = _headerSpace;
 			foreach (var cellInfo in _cellInfos)
 			{
+				if (cellInfo == null)
+					continue;
+
 				cellInfo.position = position;
 				position += cellInfo.size + _spacing;
 			}
@@ -495,10 +581,16 @@ namespace MobileConsole.UI
 			float viewContentSize = 0;
 			foreach (var cellInfo in _cellInfos)
 			{
+				if (cellInfo == null)
+					continue;
+
 				viewContentSize += cellInfo.size;
 			}
 
-			viewContentSize += (_cellInfos.Count - 1) * _spacing + _headerSpace + _footerSpace;
+			viewContentSize += Mathf.Max(0, _cellInfos.Count - 1) * _spacing + _headerSpace + _footerSpace;
+
+			if (!CanAccessView())
+				return viewContentSize;
 
 			if (_scrollOrientation == ScrollOrientation.Vertical)
 			{
@@ -526,6 +618,9 @@ namespace MobileConsole.UI
 			// Disable, enable game objects are very slow
 			foreach (var cell in _activeCells)
 			{
+				if (cell == null)
+					continue;
+
 				cell.SetTopPositionAndHeight(-99999, 0);
 				cell.info = null;
 				
@@ -541,14 +636,29 @@ namespace MobileConsole.UI
 
 		protected void DeactiveCell(ScrollViewCell cell)
 		{
+			if (cell == null)
+			{
+				_activeCells.Remove(cell);
+				return;
+			}
+
 			cell.SetTopPositionAndHeight(-999999, 0);
 			cell.info = null;
+
+			if (!_cellPools.ContainsKey(cell.identifier))
+			{
+				_cellPools[cell.identifier] = new List<ScrollViewCell>();
+			}
+
 			_cellPools[cell.identifier].Add(cell);
 			_activeCells.Remove(cell);
 		}
 
 		protected bool IsCellInsideViewPort(ScrollViewCellInfo cellInfo)
 		{
+			if (cellInfo == null)
+				return false;
+
 			float topViewContent = 0;
 			float bottomViewContent = _viewportHeight;
 			float topCell = cellInfo.position - _contentOffsetMax.y;
@@ -558,7 +668,7 @@ namespace MobileConsole.UI
 
 		public bool IsViewAtBottom()
 		{
-			if (_viewContent == null)
+			if (!CanAccessView())
 			{
 				return false;
 			}
@@ -578,6 +688,9 @@ namespace MobileConsole.UI
 
 		public void MoveViewToTop(bool forceUpdate = true)
 		{
+			if (!CanAccessView())
+				return;
+
 			if (_scrollOrientation == ScrollOrientation.Vertical)
 			{
 				_scrollRect.normalizedPosition = new Vector2(0, 1);
@@ -593,6 +706,9 @@ namespace MobileConsole.UI
 
 		public void MoveViewToBottom(bool forceUpdate = true)
 		{
+			if (!CanAccessView())
+				return;
+
 			if (_scrollOrientation == ScrollOrientation.Vertical)
 			{
 				_scrollRect.normalizedPosition = new Vector2(0, 0);
@@ -608,44 +724,62 @@ namespace MobileConsole.UI
 			}
 		}
 
-        public void MoveViewTo(int cellIndex)
-        {
-            if (_scrollOrientation == ScrollOrientation.Vertical)
-            {
-                ScrollViewCellInfo cellInfo = _cellInfos.Find(ci => ci.index == cellIndex);
-                if (cellInfo == null)
-                {
-                    Debug.LogWarningFormat("Cell index ({0}) is out of range [0, {1}]", cellIndex, _cellInfos.Count - 1);
-                    return;
-                }
+	        public void MoveViewTo(int cellIndex)
+	        {
+	            if (!CanAccessView())
+	                return;
 
-                float halfViewPortHeight = _viewportHeight / 2;
-                float contentHeight = _viewContent.sizeDelta.y;
-                float movableContentHeight = contentHeight - _viewportHeight;
-                float cellCenterPosY = cellInfo.position + cellInfo.size / 2;
+	            if (_scrollOrientation == ScrollOrientation.Vertical)
+	            {
+	                ScrollViewCellInfo cellInfo = _cellInfos.Find(ci => ci.index == cellIndex);
+	                if (cellInfo == null)
+	                {
+	                    Debug.LogWarningFormat("Cell index ({0}) is out of range [0, {1}]", cellIndex, _cellInfos.Count - 1);
+	                    return;
+	                }
 
-                float normalizeHeight = (cellCenterPosY - halfViewPortHeight) / movableContentHeight;
-                normalizeHeight = 1.0f - Mathf.Clamp01(normalizeHeight);
+	                float halfViewPortHeight = _viewportHeight / 2;
+	                float contentHeight = _viewContent.sizeDelta.y;
+	                float movableContentHeight = contentHeight - _viewportHeight;
+	                if (movableContentHeight <= 0)
+	                {
+	                    MoveViewToTop(false);
+	                    return;
+	                }
 
-                _scrollRect.normalizedPosition = new Vector2(0, normalizeHeight);
-            }
-            else if (_scrollOrientation == ScrollOrientation.Horizontal)
-            {
+	                float cellCenterPosY = cellInfo.position + cellInfo.size / 2;
+	                float normalizeHeight = (cellCenterPosY - halfViewPortHeight) / movableContentHeight;
+	                normalizeHeight = 1.0f - Mathf.Clamp01(normalizeHeight);
 
-            }
+	                _scrollRect.normalizedPosition = new Vector2(0, normalizeHeight);
+	            }
+	            else if (_scrollOrientation == ScrollOrientation.Horizontal)
+	            {
 
-            if (gameObject.activeInHierarchy)
-            {
-                OnScrollRectChanged(Vector2.zero);
-            }
-        }
+	            }
+
+	            if (gameObject.activeInHierarchy)
+	            {
+	                OnScrollRectChanged(Vector2.zero);
+	            }
+	        }
 
 		void LazyGetViewportHeight()
 		{
-			if (_viewportHeight <= 0)
+			if (_viewportHeight <= 0 && _viewPort != null)
 			{
 				_viewportHeight = _viewPort.rect.height;
 			}
+		}
+
+		bool CanAccessView()
+		{
+			return this != null && !_isDestroyed && _scrollRect != null && _viewPort != null && _viewContent != null;
+		}
+
+		void RemoveMissingActiveCells()
+		{
+			_activeCells.RemoveAll(cell => cell == null || cell.info == null);
 		}
 	}
 }
