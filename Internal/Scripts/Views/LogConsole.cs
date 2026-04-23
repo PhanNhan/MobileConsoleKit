@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -30,6 +30,7 @@ namespace MobileConsole
 		public static event EventCommandsCreated OnCommandsCreated;
 		private static bool _hasCommandsCreated = false;
 		private static List<Command> _commands = new List<Command>();
+		private static LogConsole _instance;
 
 		[SerializeField]
 		Vector2 _designLandscapeResolution;
@@ -61,6 +62,14 @@ namespace MobileConsole
 
 		void Awake()
 		{
+			if (_instance != null && _instance != this)
+			{
+				Destroy(gameObject);
+				return;
+			}
+
+			_instance = this;
+
 			if (LogConsoleSettings.Instance.hideInHierarchy)
 			{
 				gameObject.hideFlags = HideFlags.HideInHierarchy;
@@ -92,7 +101,28 @@ namespace MobileConsole
 			OnAllSubViewClosed = _CloseAllSubView;
             OnShareAllLogRequest = _OnShareAllLogRequest;
 			
-			_logButton.SetActive(LogConsoleSettings.Instance.useLogButton);
+			if (_logButton != null)
+			{
+				_logButton.SetActive(LogConsoleSettings.Instance.useLogButton);
+			}
+		}
+
+		void OnDestroy()
+		{
+			OnRequestLogConsoleVisibilityChange -= RequestLogConsoleVisibilityChange;
+			OnLogConsoleToggled -= ToggleShowLogConsole;
+			EventBridge.OnWindowSizeChanged -= OnWindowSizeChanged;
+			EventBridge.OnFPSVisibilityChanged -= OnFPSVisibilityChanged;
+
+			if (_channelViewBuilder != null)
+			{
+				_channelViewBuilder.OnHide -= OnChannelViewClosed;
+			}
+
+			if (_instance == this)
+			{
+				_instance = null;
+			}
 		}
 
 		void UpdateCanvasScaler()
@@ -314,6 +344,9 @@ namespace MobileConsole
 
 		void RequestLogConsoleVisibilityChange(bool visibility)
 		{
+			if (!CanChangeVisibility())
+				return;
+
 			if (visibility ^ _logPanel.activeSelf)
 			{
 				ToggleShowLogConsole();
@@ -322,6 +355,9 @@ namespace MobileConsole
 
 		public void ToggleShowLogConsole()
 		{
+			if (!CanChangeVisibility())
+				return;
+
 			_logPanel.SetActive(!_logPanel.activeSelf);
 
 			// Adjust drag threshold on Android
@@ -329,13 +365,19 @@ namespace MobileConsole
 			{
 				if (_logPanel.activeSelf)
 				{
-					_defaultDragThreshold = EventSystem.current.pixelDragThreshold;
-					EventSystem.current.pixelDragThreshold = Mathf.Max(_defaultDragThreshold, (int)(_defaultDragThreshold * Screen.dpi / 160f));
+					if (EventSystem.current != null)
+					{
+						_defaultDragThreshold = EventSystem.current.pixelDragThreshold;
+						EventSystem.current.pixelDragThreshold = Mathf.Max(_defaultDragThreshold, (int)(_defaultDragThreshold * Screen.dpi / 160f));
+					}
 				}
 				else
 				{
 					// Restore to game value
-					EventSystem.current.pixelDragThreshold = _defaultDragThreshold;
+					if (EventSystem.current != null)
+					{
+						EventSystem.current.pixelDragThreshold = _defaultDragThreshold;
+					}
 				}
 			}
 
@@ -366,10 +408,10 @@ namespace MobileConsole
 
 		public static void Show(bool isShow = true)
 		{
-			if (OnRequestLogConsoleVisibilityChange != null)
-			{
-				OnRequestLogConsoleVisibilityChange(isShow);
-			}
+			if (_instance == null)
+				return;
+
+			_instance.RequestLogConsoleVisibilityChange(isShow);
 		}
 
 		public static void Hide()
@@ -379,10 +421,15 @@ namespace MobileConsole
 
 		public static void ToggleShow()
 		{
-            if (OnLogConsoleToggled != null)
-            {
-                OnLogConsoleToggled();
-            }
+			if (_instance == null)
+				return;
+
+			_instance.ToggleShowLogConsole();
+		}
+
+		bool CanChangeVisibility()
+		{
+			return this != null && _logPanel != null;
 		}
 
 #if ENABLE_LEGACY_INPUT_MANAGER
